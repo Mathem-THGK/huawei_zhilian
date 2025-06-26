@@ -9,27 +9,24 @@ import math
 
 # -----------------------------------------------------------------------------
 # 赛题二：AI最短推理时延 - 完整解决方案
-# 版本：混合策略（带健壮的计时器和超时中断）
+# 版本：最终提交版 (无任何额外输出)
 # -----------------------------------------------------------------------------
 
+# --- 辅助工具：解析函数和调度器类 ---
 def parse_input_line(line):
-    # 此函数保持不变
     line = line.strip()
     match = re.match(r'(\w+)\((.*)\)', line, re.DOTALL)
     if not match: return None, None
     func_name, args_str = match.group(1), match.group(2)
     try:
-        # 尝试使用ast.literal_eval进行更安全的解析
         return func_name, ast.literal_eval(args_str)
     except (ValueError, SyntaxError):
-        # 作为备用方案，处理一些非标准格式
         try:
             return func_name, ast.literal_eval(args_str.replace('[', '(').replace(']', ')'))
         except: 
             return None, None
 
 class Scheduler:
-    # Scheduler 类的代码保持不变
     def __init__(self):
         self.soc_info = {}
         self.op_lib = {}
@@ -110,13 +107,11 @@ class Scheduler:
             self.priorities[u_node] = exec_time + max_p
             for pred in self.predecessors.get(u_node, []):
                 if pred not in visited:
-                    # 确保一个节点的所有后继都已被访问后，才将其加入队列
                     if all(succ_of_pred in visited for succ_of_pred in self.successors.get(pred, [])):
                         visited.add(pred)
                         q.append(pred)
 
     def schedule_attempt(self, op_graph, op_nodes, tiling_choices):
-        # schedule_attempt 方法的核心调度逻辑保持不变
         self.op_graph_info = op_graph
         if not self._build_full_dependency_graph(op_nodes, tiling_choices):
             return float('inf'), None
@@ -158,7 +153,7 @@ class Scheduler:
             for item in nodes_to_reschedule: heapq.heappush(ready_queue, item)
             
             if not running_nodes:
-                if ready_queue: return float('inf'), None # 死锁检测
+                if ready_queue: return float('inf'), None
                 else: break
 
             next_event_time = running_nodes[0][0]
@@ -170,7 +165,6 @@ class Scheduler:
                 finished_count += 1
                 node_finish_times[node] = finish_time
                 
-                # 内存释放逻辑简化（注意：真实赛题的内存释放逻辑更复杂，这里是简化版）
                 mem_detail = node_mem_detail_cache[node]
                 for mt, ms in mem_detail.items(): memory_in_use[mt] -= ms
                 
@@ -183,13 +177,11 @@ class Scheduler:
             makespan = max(node_finish_times.values()) if node_finish_times else 0
             return makespan, sorted(schedule_result)
         else:
-            # 如果未能完成所有节点，则视为失败
             return float('inf'), None
 
-def main():
-    # 【修改点 1】设置计时器起点和总时间限制
+# --- 主解决函数 ---
+def solve():
     start_of_main = time.time()
-    # 竞赛限制60秒，我们设定55秒作为安全阈值，为I/O等其他开销留出缓冲
     TIME_LIMIT_SECONDS = 55.0
     
     scheduler = Scheduler()
@@ -216,19 +208,14 @@ def main():
             op_graph, op_nodes_info = initial_args
             op_map = {op[0]: (op[1], op[2]) for op in op_nodes_info}
             
-            # 初始化最优解记录
             best_schedule = None
             best_energy = float('inf')
             best_solution_choice = None
-
-            # --- STAGE 1, Plan A: 贪心策略 ---
-            sys.stderr.write("[Hybrid] Stage 1: 使用贪心策略生成初始解...\n")
             
             greedy_choice = {}
             for op_id, (op_type, shape) in op_map.items():
                 available = scheduler.available_tilings.get((op_type, shape), [])
                 if not available:
-                    sys.stderr.write(f"[错误] 算子 {op_id} 没有任何可用的Tiling策略。程序退出。\n")
                     print("[]"); return
 
                 best_tiling_id = -1; min_exec_time = float('inf')
@@ -242,48 +229,36 @@ def main():
 
             initial_energy, initial_schedule = scheduler.schedule_attempt(op_graph, op_nodes_info, greedy_choice)
 
-            # --- STAGE 1, Plan B: 如果贪心失败，则启动随机搜索作为后备 ---
             if initial_energy == float('inf'):
-                sys.stderr.write("[警告] 贪心解不可行，启动随机搜索作为后备计划...\n")
                 attempts = 0; max_attempts = 1000
                 current_choice = {}
                 while initial_energy == float('inf') and attempts < max_attempts:
-                    # 【修改点 2】在随机搜索中加入超时检查
                     if (time.time() - start_of_main) > TIME_LIMIT_SECONDS:
-                        sys.stderr.write("[超时] 寻找初始解阶段超时，输出空结果。\n")
                         print("[]"); return
                         
                     current_choice = {op_id: random.choice(scheduler.available_tilings[op_map[op_id]]) for op_id in op_map if op_map[op_id] in scheduler.available_tilings and scheduler.available_tilings[op_map[op_id]]}
                     initial_energy, initial_schedule = scheduler.schedule_attempt(op_graph, op_nodes_info, current_choice)
                     attempts += 1
-                # 如果随机搜索成功，更新greedy_choice以反映当前的可行解
                 if initial_energy < float('inf'):
                      greedy_choice = current_choice
 
-            # --- 检查初始解是否找到 ---
             if initial_energy < float('inf'):
                 best_energy, best_schedule, best_solution_choice = initial_energy, initial_schedule, greedy_choice
-                sys.stderr.write(f"[Hybrid] 成功找到初始解，初始T: {best_energy:.0f}\n")
             else:
-                sys.stderr.write(f"[错误] 在所有尝试后仍未能找到任何可行解。输出空结果。\n")
                 print("[]"); return
-
-            # --- STAGE 2: 以找到的可行解为起点，进行模拟退火精调 ---
-            sys.stderr.write(f"[Hybrid] Stage 2: 以初始解为起点进行模拟退火...\n")
             
             current_solution, current_energy = best_solution_choice, best_energy
             
             initial_temp, final_temp, alpha = 1000.0, 1.0, 0.99
             temp = initial_temp
             
-            # 【修改点 3】在主循环中严格遵守时间限制
             while temp > final_temp and (time.time() - start_of_main) < TIME_LIMIT_SECONDS:
                 neighbor_solution = current_solution.copy()
                 op_to_change = random.choice(list(op_map.keys()))
                 op_type, shape = op_map[op_to_change]
                 available = scheduler.available_tilings.get((op_type, shape), [])
                 if len(available) <= 1:
-                    continue # 如果没有其他选项，跳过此轮
+                    continue
                 
                 new_tiling = random.choice([t for t in available if t != current_solution[op_to_change]])
                 neighbor_solution[op_to_change] = new_tiling
@@ -291,24 +266,19 @@ def main():
                 neighbor_energy, neighbor_schedule = scheduler.schedule_attempt(op_graph, op_nodes_info, neighbor_solution)
                 
                 if neighbor_energy < float('inf'):
-                    # 【修改点 4】修正最优解更新逻辑
-                    # 检查是否找到了历史最优解
                     if neighbor_energy < best_energy:
                         best_energy = neighbor_energy
                         best_schedule = neighbor_schedule
                         best_solution_choice = neighbor_solution
-                        sys.stderr.write(f"  [发现更优解] 新的T: {best_energy:.0f}, 温度: {temp:.2f}\n")
                     
-                    # 根据Metropolis准则决定是否移动到新状态
                     energy_delta = neighbor_energy - current_energy
                     if energy_delta < 0 or (random.random() < math.exp(-energy_delta / temp)):
                         current_solution, current_energy = neighbor_solution, neighbor_energy
                 
                 temp *= alpha
 
-            sys.stderr.write(f"\n[完成] 迭代结束或超时。找到的最优时间为: {best_energy if best_energy != float('inf') else 'N/A'}\n")
-            # 【修改点 5】最终输出，如果 best_schedule 从未被成功赋值，则输出 "[]"
             print(str(best_schedule).replace(" ", "") if best_schedule else "[]")
 
-if __name__ == "__main__":
-    main()
+# --- 程序执行入口 ---
+if __name__ == '__main__':
+    solve()
